@@ -101,12 +101,24 @@ templates/
   template-EDGE-DOCKER_COMPOSE.json       # abstract (no version in name)
   template-GATEWAY-DOCKER_COMPOSE.json    # abstract
   template-GENERIC-DOCKER_COMPOSE.json    # abstract (verbatim, no versioning)
+  since/
+    4.4.1/template-EDGE-DOCKER_COMPOSE.json   # replaces the base edge template on TB 4.4.1+
 ```
 
-### Compose — line default + optional concrete override
-Keep **one set per infra "line"** (major.minor); within a line only the image tag varies,
-so parametrize it. Allow a **per-version subfolder** to override the line default for a
-one-off version whose infra differs.
+Every TB server syncs this branch, so a base template may only use what the oldest supported
+server understands (e.g. an unknown `${var.*}` is left as a literal). A template that needs
+something newer goes to `since/<TB version>/` under the same file name: a server uses, per file,
+the newest `since` folder whose version is not above its own, else the base file. Folders don't
+have to contain every template, and servers that predate `since/` never list it.
+
+Example: `since/4.4.1` uses `${var.nextEdgeRepo}` (`tb-edge-pe` up to 4.4.0.1, `tb-edge` from
+4.4.1) for the DB-migration job image, since the 4.4.0.1 -> 4.4.1 upgrade switches image repos.
+A TB 4.4.2 server with no `since/4.4.2` folder keeps using `since/4.4.1`.
+
+### Compose — version folders, flat
+Compose sets live in **version folders side by side** (no nesting): one per infra "line"
+(major.minor) plus a folder for any later version whose compose differs. Within a folder only
+the image tag varies, so parametrize it.
 
 ```
 compose/
@@ -114,17 +126,28 @@ compose/
     3.9/{in_memory,kafka,hybrid}.yml            # line default; image: thingsboard/tb-edge-pe:${var.edgeVersion}
     4.0/{in_memory,kafka,hybrid}.yml
     4.2/{in_memory,kafka,hybrid}.yml
-    4.2/4.2.1/{in_memory,kafka,hybrid}.yml      # OPTIONAL concrete override for exactly 4.2.1
     4.3/{in_memory,kafka,hybrid}.yml
+    4.4/{in_memory,kafka,hybrid}.yml
+    4.4.1/{in_memory,kafka,hybrid}.yml          # 4.4.1+ CE-style image: thingsboard/tb-edge:${var.edgeVersion}
   gateway/
     3.8/default.yml                             # image: thingsboard/tb-gateway:${var.gatewayVersion}
   generic/
     default.yml
 ```
 
-**Compose lookup during materialization** for version `V` on line `L`, per install type:
+**Compose lookup during materialization** for version `V`, per compose file:
 
-> `compose/edge/L/V/<type>.yml` if it exists, else `compose/edge/L/<type>.yml`.
+> the file from the newest version folder that is not above `V`, falling back to older folders
+> when that folder doesn't have the file. For `4.4.2`: `4.4.1/` -> `4.4/` -> `4.3/` -> …
+
+So a folder applies from its version on (e.g. `4.4.1/` also serves 4.4.1.1, 4.4.2, 4.5.0, …)
+until a newer folder exists; add a folder only when the compose actually changes. Template
+paths keep the `${var.composeLine}` folder (`compose/edge/${var.composeLine}/kafka.yml`): newer
+servers only use it to find the parent folder to look in.
+
+Servers that predate flat folders (TB <= 4.4.0) look up `compose/edge/<line>/` directly and never
+materialize versions above their own, so they keep reading the line folders. Never rename or
+remove a line folder, and don't nest version folders inside one.
 
 Concrete override files may hardcode their tag or keep `${var.edgeVersion}` — the
 substitutor runs over whichever file is loaded, so both work.
